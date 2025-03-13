@@ -1,5 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import CssBaseline from "@mui/material/CssBaseline";
+import Container from "@mui/material/Container";
+import Navbar from "./components/Navbar";
+import TabView from "./components/TabView"; 
 
 function App() {
   const [message, setMessage] = useState('');
@@ -11,9 +15,13 @@ function App() {
   }, []);
 
   return (
-    <div>
-      <h1>{message || 'Loading...'}</h1>
-    </div>
+    <>
+      <CssBaseline />
+      <Navbar />
+      <Container maxWidth="md" sx={{ mt: 4 }}>
+        <TabView />
+      </Container>
+    </>
   );
 }
 
