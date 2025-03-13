@@ -5,3 +5,4 @@ __pycache__/
 *.log
 .DS_Store
 frontend/node_modules/
+backend/uploads
