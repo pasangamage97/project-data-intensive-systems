@@ -5,14 +5,14 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
   const [dropdownValue, setDropdownValue] = useState("");
   const [file, setFile] = useState(null);
   const [alertMessage, setAlertMessage] = useState("");
-  const [alertSeverity, setAlertSeverity] = useState("info"); // 'info', 'error', 'success', etc.
+  const [alertSeverity, setAlertSeverity] = useState("info");
+  const [isSubmitting, setIsSubmitting] = useState(false); // Add loading state
 
-  // This effect will run once when the component mounts, and fetch system status from a separate API
   useEffect(() => {
     const checkSystemStatus = async () => {
       try {
         const response = await fetch(systemStatusEndpoint, {
-          method: "GET", // This can be changed based on your status-checking API
+          method: "GET", 
           headers: {
             "Content-Type": "application/json",
           },
@@ -32,7 +32,7 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
       }
     };
 
-    checkSystemStatus(); // Trigger the system check when component mounts
+    checkSystemStatus();
   }, [systemStatusEndpoint]);
 
   const handleDropdownChange = (event) => {
@@ -59,6 +59,8 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
       return;
     }
 
+    setIsSubmitting(true); // Set submitting to true when form is being submitted
+
     try {
       const response = await fetch(submitEndpoint, {
         method: "POST",
@@ -82,6 +84,8 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
     } catch (error) {
       setAlertMessage("Error during form submission.");
       setAlertSeverity("error");
+    } finally {
+      setIsSubmitting(false); // Set submitting to false after the response
     }
   };
 
@@ -121,13 +125,14 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
         <input type="file" hidden onChange={handleFileChange} accept=".csv" />
       </Button>
 
-      {/* Submit Button - Full width */}
+      {/* Submit Button - Full width, disabled and loading state */}
       <Button 
         type="submit" 
         variant="contained" 
         sx={{ width: "100%" }}
+        disabled={isSubmitting} // Disable button while submitting
       >
-        Submit
+        {isSubmitting ? "Submitting..." : "Submit"} {/* Change button text while submitting */}
       </Button>
     </Box>
   );
