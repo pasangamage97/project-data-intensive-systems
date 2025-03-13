@@ -9,7 +9,6 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
 
   // This effect will run once when the component mounts, and fetch system status from a separate API
   useEffect(() => {
-    // Simulating an API call to check system status (you can replace this with your actual status-checking endpoint)
     const checkSystemStatus = async () => {
       try {
         const response = await fetch(systemStatusEndpoint, {
@@ -21,7 +20,6 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
 
         if (response.ok) {
           const result = await response.json();
-          // Assuming the result has a 'status' field
           setAlertMessage("System is working fine!");
           setAlertSeverity("success");
         } else {
@@ -35,7 +33,7 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
     };
 
     checkSystemStatus(); // Trigger the system check when component mounts
-  }, [systemStatusEndpoint]); // Trigger the effect when `systemStatusEndpoint` changes
+  }, [systemStatusEndpoint]);
 
   const handleDropdownChange = (event) => {
     setDropdownValue(event.target.value);
@@ -47,6 +45,19 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+
+    // Validate if a model is selected and a CSV file is uploaded
+    if (!dropdownValue) {
+      setAlertMessage("Please select a model.");
+      setAlertSeverity("error");
+      return;
+    }
+
+    if (!file || file.type !== "text/csv") {
+      setAlertMessage("Please upload a CSV file.");
+      setAlertSeverity("error");
+      return;
+    }
 
     try {
       const response = await fetch(submitEndpoint, {
@@ -106,8 +117,8 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
         component="label" 
         sx={{ mb: 2, width: "100%" }}
       >
-        {file ? file.name : "Choose a file"}
-        <input type="file" hidden onChange={handleFileChange} />
+        {file ? file.name : "Choose a CSV file"}
+        <input type="file" hidden onChange={handleFileChange} accept=".csv" />
       </Button>
 
       {/* Submit Button - Full width */}
