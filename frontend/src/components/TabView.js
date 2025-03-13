@@ -1,52 +1,67 @@
-import React, { useState } from "react";
-import { Tabs, Tab, Box, Container } from "@mui/material";
-import FormComponent from "./FormComponent"; // ✅ Import FormComponent
+import React, { useState, useEffect } from "react";
+import { Tabs, Tab, Box } from "@mui/material";
+import FormComponent from "./FormComponent";
 
 export default function TabView() {
-  const [activeTab, setActiveTab] = useState(0);
+  const [tabValue, setTabValue] = useState(0);
+  const [models, setModels] = useState([]);
+  const [categorizingModels, setCategorizingModels] = useState([]);
 
-  // Define dropdown options for each tab
-  const dropdownOptionsTabOne = [
-    { value: "option1", label: "Option 1" },
-    { value: "option2", label: "Option 2" },
-    { value: "option3", label: "Option 3" },
-  ];
+  // Fetch dropdown data when component mounts
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const response = await fetch("http://127.0.0.1:5001/api/models");
+        if (response.ok) {
+          const data = await response.json();
+          setModels(data);
+        }
+      } catch (error) {
+        console.error("Error fetching models:", error);
+      }
+    };
 
-  const dropdownOptionsTabTwo = [
-    { value: "optionA", label: "Option A" },
-    { value: "optionB", label: "Option B" },
-    { value: "optionC", label: "Option C" },
-  ];
+    const fetchCategorizingModels = async () => {
+      try {
+        const response = await fetch("http://127.0.0.1:5001/api/categorizingModels");
+        if (response.ok) {
+          const data = await response.json();
+          setCategorizingModels(data);
+        }
+      } catch (error) {
+        console.error("Error fetching categorizing models:", error);
+      }
+    };
 
-  // Define submit endpoints for each tab
-  const submitEndpointTabOne = "https://api.example.com/submitTabOne";
-  const submitEndpointTabTwo = "https://api.example.com/submitTabTwo";
+    fetchModels();
+    fetchCategorizingModels();
+  }, []);
 
   return (
-    <Container maxWidth="md">
-      {/* Tabs Navigation */}
-      <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)}>
-        <Tab label="Regression" />
-        <Tab label="Classification" />
+    <Box sx={{ width: "100%" }}>
+      <Tabs value={tabValue} onChange={(event, newValue) => setTabValue(newValue)}>
+        <Tab label="Models" />
+        <Tab label="Categorizing Models" />
       </Tabs>
 
-      {/* Tab Content - Left aligned */}
-      <Box sx={{ mt: 2, p: 2, pl:0, display: "flex", justifyContent: "flex-start" }}>
-        {activeTab === 0 && (
+      <Box sx={{ p: 2 }}>
+        {tabValue === 0 && (
           <FormComponent
-            title="Make Prediction"
-            dropdownOptions={dropdownOptionsTabOne}
-            submitEndpoint={submitEndpointTabOne}
+            title="Select a Model"
+            dropdownOptions={models}
+            submitEndpoint="http://127.0.0.1:5001/api/predict"
+            systemStatusEndpoint="/api/system-status"
           />
         )}
-        {activeTab === 1 && (
+        {tabValue === 1 && (
           <FormComponent
-            title="Select Model & Classify"
-            dropdownOptions={dropdownOptionsTabTwo}
-            submitEndpoint={submitEndpointTabTwo}
+            title="Select a Categorizing Model"
+            dropdownOptions={categorizingModels}
+            submitEndpoint="http://127.0.0.1:5001/api/classify-weakest-link"
+            systemStatusEndpoint="/api/system-status"
           />
         )}
       </Box>
-    </Container>
+    </Box>
   );
 }
