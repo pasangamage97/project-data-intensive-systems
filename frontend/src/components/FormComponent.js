@@ -57,7 +57,8 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("model", dropdownValue);
+    formData.append("model_name", dropdownValue);
+    submitEndpoint = submitEndpoint === "predict" ? `http://127.0.0.1:5001/api/predict/${dropdownValue}` : `http://127.0.0.1:5001/api/classify-weakest-link/`;
 
     try {
       const response = await fetch(submitEndpoint, {
