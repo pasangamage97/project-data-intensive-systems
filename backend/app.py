@@ -135,7 +135,7 @@ def predict(model_name):
         return jsonify({"error": "No selected file"}), 400
     
     # Load the model correctly
-    loaded_tuple = load_model(model_name)
+    loaded_tuple = load_model(model_name,"regression")
 
     if not loaded_tuple:
         return jsonify({"error": "Model not found"}), 404
@@ -205,7 +205,7 @@ def classify_weakest_link(model_name):
         return jsonify({"error": "No selected file"}), 400
     
     # Load the model correctly
-    loaded_tuple = load_model(model_name)
+    loaded_tuple = load_model(model_name,"weaksetLink")
 
     if not loaded_tuple:
         return jsonify({"error": "Model not found"}), 404
