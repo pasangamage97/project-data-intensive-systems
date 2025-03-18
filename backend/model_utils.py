@@ -23,9 +23,12 @@ def get_model_names():
         "categorizingModels": get_models(CATEGORIZING_MODELS_DIR),
     }
 
-def load_model(model_name):
-    model_path = os.path.join(MODELS_DIR, f"{model_name}.pkl")
-    
+def load_model(model_name,type):
+    if(type=="regression"):
+        model_path =  os.path.join(MODELS_DIR, f"{model_name}.pkl")
+    else:
+        model_path =  os.path.join(CATEGORIZING_MODELS_DIR, f"{model_name}.pkl")
+
     if not os.path.exists(model_path):  # Check if the file exists
         raise FileNotFoundError(f"Model file '{model_name}.pkl' not found!")
 

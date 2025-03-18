@@ -50,7 +50,7 @@ export default function TabView() {
   return (
     <Box sx={{ width: "100%" }}>
       <Tabs value={tabValue} onChange={(event, newValue) => setTabValue(newValue)}>
-        <Tab label="Models" />
+        <Tab label="Regression" />
         <Tab label="Categorizing Models" />
       </Tabs>
 

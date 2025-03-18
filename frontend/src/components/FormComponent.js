@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Box, Button, FormControl, InputLabel, MenuItem, Select, Typography, Alert, CircularProgress } from "@mui/material";
+import ResultComponent from "./ResultComponent";
 
 export default function FormComponent({ title, dropdownOptions, submitEndpoint, systemStatusEndpoint }) {
   const [dropdownValue, setDropdownValue] = useState("");
@@ -7,6 +8,7 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
   const [alertMessage, setAlertMessage] = useState("");
   const [alertSeverity, setAlertSeverity] = useState("info");
   const [isSubmitting, setIsSubmitting] = useState(false); // Submission state
+  const [responseData, setResponseData] = useState(null);
 
   useEffect(() => {
     const checkSystemStatus = async () => {
@@ -58,7 +60,7 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
     const formData = new FormData();
     formData.append("file", file);
     formData.append("model_name", dropdownValue);
-    submitEndpoint = submitEndpoint === "predict" ? `http://127.0.0.1:5001/api/predict/${dropdownValue}` : `http://127.0.0.1:5001/api/classify-weakest-link/`;
+    submitEndpoint = submitEndpoint === "predict" ? `http://127.0.0.1:5001/api/predict/${dropdownValue}` : `http://127.0.0.1:5001/api/classify-weakest-link/${dropdownValue}`;
 
     try {
       const response = await fetch(submitEndpoint, {
@@ -68,6 +70,7 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
 
       if (response.ok) {
         const result = await response.json();
+        setResponseData(result);
         setAlertMessage(result.message || "Form submitted successfully!");
         setAlertSeverity("success");
       } else {
@@ -132,6 +135,7 @@ export default function FormComponent({ title, dropdownOptions, submitEndpoint, 
       >
         {isSubmitting ? <CircularProgress size={24} /> : "Submit"} {/* Show loading spinner */}
       </Button>
+      <ResultComponent data={responseData} />
     </Box>
   );
 }
