@@ -51,7 +51,7 @@ export default function TabView() {
     <Box sx={{ width: "100%" }}>
       <Tabs value={tabValue} onChange={(event, newValue) => setTabValue(newValue)}>
         <Tab label="Regression" />
-        <Tab label="Categorizing Models" />
+        <Tab label="Classifier" />
       </Tabs>
 
       <Box sx={{ p: 2 }}>
@@ -65,7 +65,7 @@ export default function TabView() {
         )}
         {tabValue === 1 && (
           <FormComponent
-            title="Select a Categorizing Model"
+            title="Select a Classifier Model"
             dropdownOptions={categorizingModels}
             submitEndpoint="classify-weakest-link"
             systemStatusEndpoint="/api/system-status"
