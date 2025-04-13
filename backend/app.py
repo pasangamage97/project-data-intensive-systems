@@ -1,13 +1,129 @@
 from flask import Flask, request, jsonify
-import os
-import pandas as pd
-import numpy as np
 from flask_cors import CORS
+import tensorflow as tf
+import tensorflow_hub as hub
+import numpy as np
+import cv2
+import base64
+import re
+import csv
+import os
+from datetime import datetime
+import uuid
 from model_utils import get_model_names,load_model
-
 
 app = Flask(__name__)
 CORS(app)
+
+
+# Load the MoveNet model (You can choose either "lightning" or "thunder" variant)
+model_name = "movenet_lightning"  # or "movenet_thunder" for higher accuracy but slower processing
+model = hub.load(f"https://tfhub.dev/google/movenet/{model_name}/1")
+movenet = model.signatures['serving_default']
+
+# Keypoint names in the order they appear in the model's output
+KEYPOINT_NAMES = [
+    'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+    'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+    'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+    'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
+]
+
+# Directory for saving CSV files
+CSV_DIR = "pose_data"
+os.makedirs(CSV_DIR, exist_ok=True)
+
+def base64_to_image(base64_string):
+    # Extract the base64 encoded binary data
+    image_data = re.sub('^data:image/.+;base64,', '', base64_string)
+    image_bytes = base64.b64decode(image_data)
+    
+    # Convert to OpenCV image
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    return image
+
+def run_movenet(image):
+    # Convert to RGB (MoveNet expects RGB)
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    
+    # Resize the image to the expected input dimensions
+    input_size = 192  # MoveNet Lightning uses 192x192, Thunder uses 256x256
+    input_image = tf.image.resize_with_pad(tf.expand_dims(image_rgb, axis=0), input_size, input_size)
+    
+    # Convert to float32
+    input_image = tf.cast(input_image, dtype=tf.int32)
+    
+    # Run inference
+    results = movenet(input_image)
+    
+    # Extract keypoints
+    keypoints = results['output_0'].numpy().squeeze()
+    
+    # Format results
+    formatted_keypoints = []
+    for idx, kp in enumerate(keypoints):
+        y, x, score = kp
+        formatted_keypoints.append({
+            'name': KEYPOINT_NAMES[idx],
+            'y': float(y),
+            'x': float(x),
+            'score': float(score)
+        })
+    
+    return formatted_keypoints
+
+def save_to_csv(keypoints, filename=None):
+    if filename is None:
+        # Generate a unique filename using timestamp and UUID
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"{CSV_DIR}/pose_data_{timestamp}_{unique_id}.csv"
+    else:
+        # Make sure the filename has the correct path and extension
+        if not filename.startswith(CSV_DIR):
+            filename = f"{CSV_DIR}/{filename}"
+        if not filename.endswith('.csv'):
+            filename += '.csv'
+    
+    # Prepare data for CSV
+    headers = ['keypoint', 'x', 'y', 'score']
+    rows = []
+    
+    for kp in keypoints:
+        rows.append([kp['name'], kp['x'], kp['y'], kp['score']])
+    
+    # Write to CSV
+    with open(filename, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(headers)
+        writer.writerows(rows)
+    
+    return filename
+
+@app.route('/detect_pose', methods=['POST'])
+def detect_pose():
+    if 'image' not in request.json:
+        return jsonify({'error': 'No image data provided'}), 400
+    
+    # Get the base64 image data
+    base64_image = request.json['image']
+    
+    # Convert base64 to image
+    image = base64_to_image(base64_image)
+    
+    # Run MoveNet on the image
+    keypoints = run_movenet(image)
+    
+    # Save keypoints to CSV
+    csv_filename = save_to_csv(keypoints)
+    
+    # Return results
+    return jsonify({
+        'keypoints': keypoints,
+        'csv_filename': os.path.basename(csv_filename)
+    })
 
 
 # Ensure an upload folder exists
@@ -42,87 +158,6 @@ def get_categorizing_models():
         {"label": "Category Z", "value": "category_z"},
     ]
     return jsonify(categorizing_models)
-
-# Route to handle CSV file upload for prediction
-# @app.route('/api/predict/<model_name>', methods=['POST'])
-# def predict(model_name):
-#     if 'file' not in request.files:
-#         return jsonify({"error": "No file part"}), 400
-
-#     file = request.files['file']
-
-#     if file.filename == '':
-#         return jsonify({"error": "No selected file"}), 400
-    
-#     model = load_model(model_name)
-
-#     if not model:
-#         return jsonify({"error": "Model not found"}), 404
-    
-#     try:
-#         # Process file
-#         contents = file.read()
-#         df = pd.read_csv(pd.io.common.BytesIO(contents))
-
-#         prediction = model.predict(df)
-#         score = float(np.clip(prediction[0], 0, 1))
-
-#         return jsonify({
-#             "model_name": model_name,
-#             "score": score
-#         })
-#     except FileNotFoundError:
-#         return jsonify({"error": f"Model '{model_name}' not found"}), 404
-#     except ValueError as ve:
-#         return jsonify({"error": str(ve)}), 400
-#     except Exception as e:
-#         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
-
-# @app.route('/api/predict/<model_name>', methods=['POST'])
-# def predict(model_name):
-#     if 'file' not in request.files:
-#         return jsonify({"error": "No file part"}), 400
-
-#     file = request.files['file']
-
-#     if file.filename == '':
-#         return jsonify({"error": "No selected file"}), 400
-    
-#     # Load the model correctly
-#     loaded_tuple = load_model(model_name)
-
-#     if not loaded_tuple:
-#         return jsonify({"error": "Model not found"}), 404
-    
-#     try:
-#         # Unpack the tuple correctly
-#         model, scaler, feature_names = loaded_tuple
-        
-#         # Read the file
-#         contents = file.read()
-#         df = pd.read_csv(pd.io.common.BytesIO(contents))
-
-#         # Ensure test data has the same columns as training
-#         df = df[feature_names]
-
-#         # Standardize test data
-#         df = scaler.transform(df)
-
-#         # Make predictions
-#         prediction = model.predict(df)
-#         score = float(np.clip(prediction[0], 0, 1))
-
-#         return jsonify({
-#             "model_name": model_name,
-#             "score": score
-#         })
-    
-#     except FileNotFoundError:
-#         return jsonify({"error": f"Model '{model_name}' not found"}), 404
-#     except ValueError as ve:
-#         return jsonify({"error": str(ve)}), 400
-#     except Exception as e:
-#         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
 @app.route('/api/predict/<model_name>', methods=['POST'])
 def predict(model_name):

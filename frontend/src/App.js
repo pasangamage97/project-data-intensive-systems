@@ -4,6 +4,7 @@ import CssBaseline from "@mui/material/CssBaseline";
 import Container from "@mui/material/Container";
 import Navbar from "./components/Navbar";
 import TabView from "./components/TabView"; 
+import PoseDetection from "./components/poseDetection"; 
 
 function App() {
   const [message, setMessage] = useState('');
@@ -16,11 +17,7 @@ function App() {
 
   return (
     <>
-      <CssBaseline />
-      <Navbar />
-      <Container maxWidth="md" sx={{ mt: 4 }}>
-        <TabView />
-      </Container>
+      <PoseDetection/>
     </>
   );
 }
