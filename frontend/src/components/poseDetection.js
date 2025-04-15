@@ -2,6 +2,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import axios from 'axios';
 import './PoseDetection.css'; // Make sure to create this CSS file
+import PoseVisualization from './poseVisualization'; // Import the coordinates display component
 
 // Define the backend URL as a constant
 const BACKEND_URL = 'http://127.0.0.1:5001';
@@ -23,6 +24,10 @@ const PoseDetection = () => {
   const [realTimeDetection, setRealTimeDetection] = useState(false); // Start disabled
   const [realTimeKeypoints, setRealTimeKeypoints] = useState(null); // Store keypoints
   const [realTimeFrames, setRealTimeFrames] = useState([]); // Store all frames for CSV
+  const [show3DVisualization, setShow3DVisualization] = useState(false); // Toggle for visualization
+  const [capturedImageData, setCapturedImageData] = useState(null);
+  const [showCapturedImage, setShowCapturedImage] = useState(false);
+
   
   // Start webcam when component mounts if in webcam mode
   useEffect(() => {
@@ -118,6 +123,26 @@ const PoseDetection = () => {
     } catch (err) {
       console.error("Error accessing webcam:", err);
       setError("Could not access webcam. Please ensure you've granted camera permissions.");
+    }
+  };
+  
+  // Clear the canvas
+  const clearCanvas = () => {
+    if (canvasRef.current) {
+      const canvas = canvasRef.current;
+      const context = canvas.getContext('2d');
+      
+      // Check if we need to redraw the video frame
+      if (mode === 'webcam' && videoRef.current) {
+        // For webcam mode, redraw the current video frame without keypoints
+        context.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      } else if (mode === 'upload' && uploadVideoRef.current) {
+        // For upload mode, redraw the current video frame without keypoints
+        context.drawImage(uploadVideoRef.current, 0, 0, canvas.width, canvas.height);
+      } else {
+        // If no video frame to redraw, clear the canvas completely
+        context.clearRect(0, 0, canvas.width, canvas.height);
+      }
     }
   };
   
@@ -225,67 +250,33 @@ const PoseDetection = () => {
   const sendImageToBackend = async (imageData) => {
     setLoading(true);
     setError(null);
+  
+    setCapturedImageData(imageData);
+  
     try {
-      // Log image data size for debugging
-      console.log(`Sending image data of length: ${imageData.length}`);
-      
-      // Try the main endpoint first
-      try {
-        const response = await axios.post(`${BACKEND_URL}/detect_pose`, {
-          image: imageData
-        }, {
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          timeout: 30000 // 30 second timeout
-        });
-        
-        console.log("Response received:", response.data);
-        setDetectionResults(response.data);
-        
-        // Draw keypoints on canvas if results are available
-        if (response.data.keypoints) {
-          drawKeypoints(response.data.keypoints);
-        } else {
-          setError("No keypoints were detected in the image.");
-        }
-      } catch (primaryError) {
-        console.warn("Primary endpoint failed, trying fallback:", primaryError);
-        
-        // If the primary endpoint fails, try the simple fallback
-        const fallbackResponse = await axios.post(`${BACKEND_URL}/detect_pose_simple`, {
-          image: imageData
-        }, {
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          timeout: 30000
-        });
-        
-        console.log("Fallback response received:", fallbackResponse.data);
-        setDetectionResults(fallbackResponse.data);
-        
-        if (fallbackResponse.data.keypoints) {
-          drawKeypoints(fallbackResponse.data.keypoints);
-        } else {
-          setError("No keypoints were detected using the fallback method.");
-        }
+      const response = await axios.post(`${BACKEND_URL}/detect_pose`, {
+        image: imageData,
+        save_csv: true
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
+      });
+  
+      if (response.data.keypoints) {
+        drawKeypoints(response.data.keypoints);
+        setShow3DVisualization(true);
+  
+        const canvasWithKeypoints = canvasRef.current.toDataURL('image/jpeg', 0.9);
+        setCapturedImageData(canvasWithKeypoints);
       }
+  
+      setDetectionResults(response.data);
+  
     } catch (err) {
       console.error("Error sending image to backend:", err);
-      if (err.response) {
-        // The request was made and the server responded with a status code
-        // that falls out of the range of 2xx
-        console.error("Response data:", err.response.data);
-        console.error("Response status:", err.response.status);
-        setError(`Server error: ${err.response.status}. ${err.response.data.error || 'Unknown error'}`);
-      } else if (err.request) {
-        // The request was made but no response was received
-        setError("No response from server. Please check if the backend is running.");
-      } else {
-        // Something happened in setting up the request that triggered an Error
-        setError(`Error: ${err.message}`);
-      }
+      setError("Error processing image. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -374,28 +365,30 @@ const PoseDetection = () => {
     }
   };
   
-  // Modify the toggle function for real-time tracking
+  // Modified toggle function for real-time tracking
   const toggleRealTimeTracking = () => {
     if (realTimeDetection) {
-      // If turning off real-time tracking, save the frames
       setRealTimeDetection(false);
       setRealTimeKeypoints(null);
-      
-      // Save all collected frames to CSV
+      clearCanvas();
+      setShowCapturedImage(false); // also remove captured image
+  
       if (realTimeFrames.length > 0) {
         saveRealTimeFramesToCSV();
       }
     } else {
-      // If turning on real-time tracking, clear previous frames
       setRealTimeFrames([]);
       setRealTimeDetection(true);
+      setShowCapturedImage(false); // hide the image if coming from capture
     }
   };
-  
   const toggleCapture = () => {
     if (isCapturing) {
       clearInterval(window.captureInterval);
       setIsCapturing(false);
+      
+      // Clear the canvas
+      clearCanvas();
     } else {
       // Capture every 2 seconds
       captureImage(); // Capture one frame immediately
@@ -405,9 +398,16 @@ const PoseDetection = () => {
   };
   
   const captureSingleImage = () => {
-    captureImage();
-  };
+    // Clear previous image from real-time
+    setRealTimeKeypoints(null);
+    setShowCapturedImage(false); // reset in case
   
+    // Then capture
+    captureImage();
+    setShowCapturedImage(true);
+  };
+
+
   const handleFileUpload = (event) => {
     const file = event.target.files[0];
     if (!file) return;
@@ -514,6 +514,7 @@ const PoseDetection = () => {
     // Clear previous results
     setDetectionResults(null);
     setError(null);
+    setRealTimeKeypoints(null);
     
     // Stop continuous capture if active
     if (isCapturing) {
@@ -521,8 +522,21 @@ const PoseDetection = () => {
       setIsCapturing(false);
     }
     
+    // Stop real-time tracking if active
+    if (realTimeDetection) {
+      setRealTimeDetection(false);
+    }
+    
+    // Clear the canvas
+    setTimeout(clearCanvas, 100); // Small delay to ensure canvas exists
+    
     // Switch mode
     setMode(newMode);
+  };
+  
+  // Toggle coordinates visibility
+  const toggleVisualization = () => {
+    setShow3DVisualization(!show3DVisualization);
   };
   
   return (
@@ -601,9 +615,11 @@ const PoseDetection = () => {
             <button onClick={captureSingleImage} disabled={loading}>
               {loading ? 'Processing...' : 'Capture Single Frame'}
             </button>
-            <button onClick={toggleCapture} disabled={loading}>
+            <button onClick={toggleCapture} disabled={loading} style={{ display: 'none'}} > 
               {isCapturing ? 'Stop Continuous Capture' : 'Start Continuous Capture'}
             </button>
+            <button onClick={clearCanvas}>reset</button>
+
           </>
         )}
         
@@ -618,6 +634,18 @@ const PoseDetection = () => {
           </>
         )}
       </div>
+      
+      {/* Add Coordinates toggle button when keypoints are available */}
+      {(detectionResults?.keypoints || realTimeKeypoints) && (
+        <div className="visualization-controls">
+          <button 
+            onClick={toggleVisualization}
+            className={show3DVisualization ? 'active' : ''}
+          >
+            {show3DVisualization ? 'Hide Coordinates' : 'Show Coordinates'}
+          </button>
+        </div>
+      )}
       
       {mode === 'upload' && videoFileDetails && (
         <div className="file-details">
@@ -646,11 +674,36 @@ const PoseDetection = () => {
         </div>
       )}
       
+      {/* Coordinates Visualization Component */}
+      {show3DVisualization && (detectionResults?.keypoints || realTimeKeypoints) && (
+        <div className="visualization-wrapper">
+          <h3>Joint Coordinates</h3>
+          <PoseVisualization 
+            keypoints={detectionResults?.keypoints || realTimeKeypoints} 
+          />
+        </div>
+      )}
+
+      {/* Captured Image with Keypoints */}
+      {capturedImageData && showCapturedImage && (
+        <div className="captured-image-container">
+          <h3>Captured Image with Keypoints</h3>
+          <img 
+            src={capturedImageData} 
+            alt="Captured pose" 
+            className="captured-image"
+          />
+        </div>
+      )}
+      
       {detectionResults && (
         <div className="results">
           <h3>Detection Results</h3>
           {detectionResults.csv_filename && (
             <p>Saved to CSV: {detectionResults.csv_filename}</p>
+          )}
+          {detectionResults.kinect_csv_filename && (
+            <p>Saved to Kinect Format CSV: {detectionResults.kinect_csv_filename}</p>
           )}
           {detectionResults.json_filename && (
             <p>Saved to JSON: {detectionResults.json_filename}</p>

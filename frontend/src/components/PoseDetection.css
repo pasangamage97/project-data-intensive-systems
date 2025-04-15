@@ -1,142 +1,202 @@
-/* PoseDetection.css */
 .pose-detection-container {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    padding: 20px;
-    border-radius: 8px;
-    background-color: #f9f9f9;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  }
-  
-  .mode-selector {
-    display: flex;
-    justify-content: center;
-    gap: 15px;
-    margin-bottom: 20px;
-  }
-  
-  .mode-selector button {
-    padding: 10px 15px;
-    background-color: #f0f0f0;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    cursor: pointer;
-    font-weight: normal;
-    transition: all 0.2s ease;
-  }
-  
-  .mode-selector button.active {
-    background-color: #4a90e2;
-    color: white;
-    border-color: #4a90e2;
-    font-weight: bold;
-  }
-  
-  .video-container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    margin-bottom: 20px;
-  }
-  
-  canvas {
-    background-color: #000;
-    max-height: 480px;
-  }
-  
-  .upload-controls {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    gap: 10px;
-    margin-bottom: 15px;
-  }
-  
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+  font-family: Arial, sans-serif;
+}
+
+.pose-detection-container h2 {
+  text-align: center;
+  margin-bottom: 20px;
+  color: #333;
+}
+
+.mode-selector {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.mode-selector button {
+  padding: 10px 20px;
+  margin: 0 10px;
+  background-color: #f1f1f1;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.3s;
+}
+
+.mode-selector button.active {
+  background-color: #007bff;
+  color: white;
+  border-color: #0056b3;
+}
+
+.error-message {
+  background-color: #f8d7da;
+  color: #721c24;
+  padding: 10px 15px;
+  margin-bottom: 20px;
+  border-radius: 4px;
+  border: 1px solid #f5c6cb;
+}
+
+.video-container {
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.video-container canvas {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+  border-radius: 4px;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.controls button {
+  padding: 10px 15px;
+  background-color: #6c757d;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.3s;
+}
+
+.controls button:hover {
+  background-color: #5a6268;
+}
+
+.controls button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+
+.controls button.active {
+  background-color: #dc3545;
+}
+
+.upload-controls {
+  margin-bottom: 15px;
+}
+
+.upload-controls input[type="file"] {
+  margin-bottom: 10px;
+}
+
+.file-details {
+  background-color: #f8f9fa;
+  padding: 15px;
+  border-radius: 4px;
+  margin-bottom: 20px;
+}
+
+.file-details h4 {
+  margin-top: 0;
+  margin-bottom: 10px;
+}
+
+.processing-indicator {
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.progress-bar {
+  height: 20px;
+  background-color: #f1f1f1;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: #007bff;
+  transition: width 0.3s ease;
+}
+
+.results {
+  background-color: #e9ecef;
+  padding: 15px;
+  border-radius: 4px;
+  margin-bottom: 20px;
+}
+
+.results h3 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.results p {
+  margin: 5px 0;
+}
+
+/* 3D Visualization */
+.visualization-wrapper {
+  margin: 20px 0;
+  padding: 15px;
+  background-color: #f8f9fa;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+}
+
+.visualization-wrapper h3 {
+  margin-top: 0;
+  margin-bottom: 15px;
+  color: #333;
+  text-align: center;
+}
+
+.visualization-controls {
+  text-align: center;
+  margin-bottom: 15px;
+}
+
+.hide-viz-button {
+  margin-top: 15px;
+  padding: 8px 15px;
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
   .controls {
-    display: flex;
-    justify-content: center;
-    gap: 15px;
-    margin-bottom: 20px;
+    flex-direction: column;
   }
   
   .controls button {
-    padding: 10px 20px;
-    background-color: #4a90e2;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: background-color 0.2s ease;
+    width: 100%;
   }
-  
-  .controls button:hover {
-    background-color: #357bd8;
-  }
-  
-  .controls button:disabled {
-    background-color: #cccccc;
-    cursor: not-allowed;
-  }
-  
-  .controls button.active {
-    background-color: #4CAF50;
-  }
-  
-  .error-message {
-    padding: 10px 15px;
-    background-color: #ffebee;
-    color: #d32f2f;
-    border-left: 4px solid #d32f2f;
-    margin-bottom: 15px;
-    border-radius: 3px;
-  }
-  
-  .file-details {
-    background-color: #f0f0f0;
-    padding: 15px;
-    border-radius: 4px;
-    margin-bottom: 20px;
-    text-align: left;
-  }
-  
-  .file-details h4 {
-    margin-top: 0;
-    margin-bottom: 10px;
-  }
-  
-  .file-details p {
-    margin: 5px 0;
-  }
-  
-  .processing-indicator {
-    margin: 20px 0;
-  }
-  
-  .progress-bar {
-    height: 20px;
-    background-color: #f0f0f0;
-    border-radius: 10px;
-    overflow: hidden;
-    margin-top: 10px;
-  }
-  
-  .progress-fill {
-    height: 100%;
-    background-color: #4a90e2;
-    transition: width 0.3s ease;
-  }
-  
-  .results {
-    background-color: #f0f0f0;
-    padding: 20px;
-    border-radius: 4px;
-    margin-top: 20px;
-    text-align: left;
-  }
-  
-  .results h3 {
-    margin-top: 0;
-    margin-bottom: 15px;
-    color: #333;
-  }
+}
+
+.captured-image-container {
+  margin-top: 20px;
+  text-align: center;
+  background: #f8f9fa;
+  padding: 15px;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+}
+
+.captured-image {
+  max-width: 100%;
+  max-height: 500px;
+  border: 1px solid #ccc;
+}

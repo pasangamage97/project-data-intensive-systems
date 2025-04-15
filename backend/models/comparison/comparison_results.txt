@@ -1,0 +1,9 @@
+--- Model Comparison Results ---
+Model Type MSE        MAE       
+------------------------------
+dense      0.0004     0.0142    
+conv1d     0.0002     0.0094    
+lstm       0.0002     0.0096    
+gru        0.0002     0.0092    
+
+Best model based on MAE: gru

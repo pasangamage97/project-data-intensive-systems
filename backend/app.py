@@ -164,7 +164,7 @@ def generate_mock_keypoints():
         })
     return mock_keypoints
 
-def save_to_csv(keypoints, filename=None, frame_number=None):
+def save_to_csv(keypoints, filename=None, frame_number=0):
     try:
         if filename is None:
             # Generate a unique filename using timestamp and UUID
@@ -178,38 +178,121 @@ def save_to_csv(keypoints, filename=None, frame_number=None):
             if not filename.endswith('.csv'):
                 filename += '.csv'
         
-        # Prepare data for CSV
-        headers = ['keypoint', 'x', 'y', 'score']
-        if frame_number is not None:
-            headers.insert(0, 'frame')
-        
-        rows = []
-        
-        # If it's a single frame
-        if frame_number is None:
-            for kp in keypoints:
-                rows.append([kp['name'], kp['x'], kp['y'], kp['score']])
-        # If it's part of a video
-        else:
-            for kp in keypoints:
-                rows.append([frame_number, kp['name'], kp['x'], kp['y'], kp['score']])
-        
         # Check if file exists to determine if we should write headers
         file_exists = os.path.isfile(filename)
         
+        # Define the column names (without the z-coordinate)
+        fieldnames = ['FrameNo']
+        joint_names = ['head', 'left_shoulder', 'left_elbow', 'right_shoulder', 'right_elbow',
+                      'left_hand', 'right_hand', 'left_hip', 'right_hip',
+                      'left_knee', 'right_knee', 'left_foot', 'right_foot']
+        
+        for name in joint_names:
+            fieldnames.extend([f"{name}_x", f"{name}_y"])
+        
+        # Map MoveNet keypoints to our joint names
+        keypoint_mapping = {
+            'nose': 'head',
+            'left_shoulder': 'left_shoulder',
+            'right_shoulder': 'right_shoulder',
+            'left_elbow': 'left_elbow',
+            'right_elbow': 'right_elbow',
+            'left_wrist': 'left_hand',
+            'right_wrist': 'right_hand',
+            'left_hip': 'left_hip',
+            'right_hip': 'right_hip',
+            'left_knee': 'left_knee',
+            'right_knee': 'right_knee',
+            'left_ankle': 'left_foot',
+            'right_ankle': 'right_foot'
+        }
+        
+        # Convert keypoints to a dictionary matching our format
+        keypoint_dict = {keypoint_mapping.get(kp['name']): kp for kp in keypoints 
+                          if kp['name'] in keypoint_mapping}
+        
+        # Prepare the row data
+        row_data = {'FrameNo': frame_number}
+        
+        # Add each mapped keypoint's x and y values
+        for joint in joint_names:
+            if joint in keypoint_dict:
+                kp = keypoint_dict[joint]
+                row_data[f"{joint}_x"] = kp['x']
+                row_data[f"{joint}_y"] = kp['y']
+            else:
+                # If we don't have data for this joint, use None or 0
+                row_data[f"{joint}_x"] = None
+                row_data[f"{joint}_y"] = None
+                
         # Write to CSV
         with open(filename, 'a', newline='') as csvfile:
-            writer = csv.writer(csvfile)
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            
+            # Write header only if the file is new
             if not file_exists:
-                writer.writerow(headers)
-            writer.writerows(rows)
+                writer.writeheader()
+            
+            # Write the row
+            writer.writerow(row_data)
         
-        logger.info(f"Saved keypoints to CSV: {filename}")
+        logger.info(f"Saved frame {frame_number} to CSV: {filename}")
         return filename
     except Exception as e:
         logger.error(f"Error saving to CSV: {e}")
         return None
-
+    try:
+        if filename is None:
+            # Generate a unique filename using timestamp and UUID
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = str(uuid.uuid4())[:8]
+            filename = f"{CSV_DIR}/pose_data_{timestamp}_{unique_id}.csv"
+        else:
+            # Make sure the filename has the correct path and extension
+            if not filename.startswith(CSV_DIR):
+                filename = f"{CSV_DIR}/{filename}"
+            if not filename.endswith('.csv'):
+                filename += '.csv'
+        
+        # Check if file exists to determine if we should write headers
+        file_exists = os.path.isfile(filename)
+        
+        # Convert keypoints to flat structure similar to kinect format
+        row_data = {"FrameNo": frame_number}
+        
+        # Add each keypoint's coordinates to the row
+        for keypoint in keypoints:
+            name = keypoint['name']
+            # Convert MoveNet names to match kinect-like format
+            name = name.replace('_ankle', '_foot').replace('_eye', '_').replace('_ear', '_')
+            
+            row_data[f"{name}_x"] = keypoint['x']
+            row_data[f"{name}_y"] = keypoint['y']
+            row_data[f"{name}_z"] = 0.0  # MoveNet doesn't provide Z coordinates, set to 0
+        
+        # Write to CSV
+        with open(filename, 'a', newline='') as csvfile:
+            # Define the fieldnames in the correct order
+            fieldnames = ['FrameNo']
+            for name in ['head', 'left_shoulder', 'left_elbow', 'right_shoulder', 'right_elbow',
+                         'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+                         'left_knee', 'right_knee', 'left_foot', 'right_foot']:
+                fieldnames.extend([f"{name}_x", f"{name}_y", f"{name}_z"])
+            
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            
+            # Write header only if the file is new
+            if not file_exists:
+                writer.writeheader()
+            
+            # Write the row
+            writer.writerow(row_data)
+        
+        logger.info(f"Saved frame {frame_number} to CSV: {filename}")
+        return filename
+    except Exception as e:
+        logger.error(f"Error saving to CSV: {e}")
+        return None
 def save_to_json(keypoints_by_frame, filename=None):
     try:
         if filename is None:
@@ -570,6 +653,44 @@ def classify_weakest_link(model_name):
 
 @app.route('/save_realtime_frames', methods=['POST'])
 def save_realtime_frames():
+    try:
+        # Check if request has JSON data
+        if not request.is_json:
+            logger.error("Invalid request: Not JSON")
+            return jsonify({'error': 'Request must be JSON'}), 400
+        
+        # Get the frames data
+        data = request.get_json()
+        if 'frames' not in data or not data['frames']:
+            logger.error("Invalid request: No frames data or empty frames")
+            return jsonify({'error': 'No frames data provided'}), 400
+        
+        frames = data['frames']
+        logger.info(f"Received {len(frames)} frames for saving")
+        
+        # Generate a unique filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        csv_filename = f"realtime_tracking_{timestamp}_{unique_id}.csv"
+        json_filename = f"realtime_tracking_{timestamp}_{unique_id}.json"
+        
+        # Save all frames to a single CSV file
+        for frame_idx, keypoints in enumerate(frames):
+            save_to_csv(keypoints, csv_filename, frame_idx)
+        
+        # Also save as JSON for easier processing (optional)
+        all_keypoints = {str(idx): keypoints for idx, keypoints in enumerate(frames)}
+        json_path = save_to_json(all_keypoints, json_filename)
+        
+        return jsonify({
+            'csv_filename': os.path.basename(csv_filename),
+            'json_filename': os.path.basename(json_filename),
+            'frames_processed': len(frames)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in /save_realtime_frames: {e}")
+        return jsonify({'error': str(e)}), 500
     try:
         # Check if request has JSON data
         if not request.is_json:

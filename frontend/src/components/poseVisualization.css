@@ -1,0 +1,114 @@
+.pose-visualization-container {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    overflow: hidden;
+    background-color: #f8f9fa;
+    margin: 20px 0;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  }
+  
+  .visualization-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background-color: #f0f0f0;
+    border-bottom: 1px solid #ddd;
+  }
+  
+  .legend {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+  }
+  
+  .color-box {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+  }
+  
+  .coordinates-panel {
+    background-color: white;
+    border-top: 1px solid #ddd;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    max-height: 500px;
+  }
+  
+  .coordinates-panel h3 {
+    margin: 0;
+    padding: 15px;
+    background-color: #f0f0f0;
+    border-bottom: 1px solid #ddd;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  
+  .coordinates-scroll {
+    overflow-y: auto;
+    flex: 1;
+  }
+  
+  .coordinates-panel table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  
+  .coordinates-panel th, .coordinates-panel td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+    font-size: 14px;
+  }
+  
+  .coordinates-panel th {
+    background-color: #f8f9fa;
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+  }
+  
+  .coordinates-panel tr:hover {
+    background-color: #f5f5f5;
+    cursor: pointer;
+  }
+  
+  .selected-joint {
+    background-color: #e3f2fd !important;
+  }
+  
+  /* These classes are kept for future 3D visualization */
+  .visualization-area {
+    display: flex;
+  }
+  
+  .threejs-container {
+    flex: 3;
+    height: 100%;
+    position: relative;
+    background-color: #2a2a2a;
+    display: none; /* Hidden until needed */
+  }
+  
+  @media (max-width: 768px) {
+    .visualization-area {
+      flex-direction: column;
+    }
+    
+    .coordinates-panel {
+      width: 100%;
+    }
+  }
