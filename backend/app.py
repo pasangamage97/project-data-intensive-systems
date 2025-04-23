@@ -713,84 +713,78 @@ def detect_pose_simple():
 def process_video():
     try:
         if 'video' not in request.files:
-            logger.error("No video file provided")
             return jsonify({'error': 'No video file provided'}), 400
 
         video_file = request.files['video']
-        logger.info(f"Processing video: {video_file.filename}")
-
-        # Generate unique file ID
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
         file_id = f"{timestamp}_{unique_id}"
 
-        # Save uploaded video to temp path
-        temp_dir = tempfile.gettempdir()
-        temp_path = os.path.join(temp_dir, f"temp_video_{file_id}.mp4")
+        temp_path = os.path.join(tempfile.gettempdir(), f"temp_video_{file_id}.mp4")
         video_file.save(temp_path)
-        logger.info(f"Saved video to temporary file: {temp_path}")
 
-        # Read video
         cap = cv2.VideoCapture(temp_path)
         if not cap.isOpened():
-            logger.error("Error opening video file")
             return jsonify({'error': 'Error opening video file'}), 500
 
         fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_interval = max(1, int(fps / 5))  # sample ~5 fps
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
+        frame_interval = max(1, int(fps / 5))
         all_frames = []
-        frame_idx = 0
 
+        frame_idx = 0
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
             if frame_idx % frame_interval == 0:
-                if model_loaded and movenet is not None:
-                    keypoints = run_movenet(frame)
-                    if not keypoints:
-                        keypoints = generate_mock_keypoints()
-                else:
-                    keypoints = generate_mock_keypoints()
+                keypoints = run_movenet(frame) if model_loaded and movenet else generate_mock_keypoints()
                 all_frames.append(keypoints)
             frame_idx += 1
 
         cap.release()
         os.remove(temp_path)
 
-        # Setup matplotlib for video output
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        fig.set_size_inches(8, 6)
+        # Setup headless matplotlib
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from matplotlib.animation import FFMpegWriter
+        from mpl_toolkits.mplot3d import Axes3D
+
+        fig = plt.figure(figsize=(12, 6))
+        ax_front = fig.add_subplot(121, projection='3d')
+        ax_side = fig.add_subplot(122, projection='3d')
 
         output_video_path = os.path.join(PROCESSED_VIDEO_DIR, f"processed_skeleton_{file_id}.mp4")
         writer = FFMpegWriter(fps=5)
 
-        # Trails dictionary to keep recent positions
-        trails = {name: [] for name in KEYPOINT_NAMES}
-
         def update_plot(keypoints):
-            ax.cla()
-            ax.set_xlim(-1, 1)
-            ax.set_ylim(-1, 1)
-            ax.set_zlim(-1, 1)
-            ax.set_title("3D Skeleton - Standing Upright")
+            ax_front.cla()
+            ax_side.cla()
 
-            # Scatter keypoints and update trails
-            for kp in keypoints:
-                if kp['score'] > 0.3:
-                    x = kp['x'] * 2 - 1
-                    y = kp['z'] * 0.8  # z is now height
-                    z = -(kp['y'] * 2 - 1)
-                    trails[kp['name']].append((x, y, z))
-                    ax.scatter(x, y, z, c='red', s=30)
+            for ax in [ax_front, ax_side]:
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+                ax.set_zlim(-1, 1)
 
-            # Draw skeleton bones
+            ax_front.view_init(elev=15, azim=-60)  # default front view
+            ax_side.view_init(elev=15, azim=0)     # side view facing person
+
             keypoint_map = {kp['name']: kp for kp in keypoints}
-            for start, end in [
+
+            # Draw joints
+            for kp in keypoints:
+                if kp['score'] < 0.3:
+                    continue
+                x = kp['x'] * 2 - 1
+                y = kp['z'] * 0.8
+                z = -(kp['y'] * 2 - 1)
+
+                ax_front.scatter(x, y, z, c='red', s=30)
+                ax_side.scatter(z, y, -x, c='red', s=30)  # Rotated
+
+            # Connect bones
+            skeleton = [
                 ('nose', 'left_eye'), ('nose', 'right_eye'),
                 ('left_eye', 'left_ear'), ('right_eye', 'right_ear'),
                 ('left_shoulder', 'right_shoulder'),
@@ -800,22 +794,22 @@ def process_video():
                 ('left_hip', 'right_hip'),
                 ('left_hip', 'left_knee'), ('right_hip', 'right_knee'),
                 ('left_knee', 'left_ankle'), ('right_knee', 'right_ankle')
-            ]:
+            ]
+
+            for start, end in skeleton:
                 if start in keypoint_map and end in keypoint_map:
-                    p1 = keypoint_map[start]
-                    p2 = keypoint_map[end]
-                    if p1['score'] > 0.3 and p2['score'] > 0.3:
-                        x1, y1, z1 = p1['x'] * 2 - 1, p1['z'] * 0.8, -(p1['y'] * 2 - 1)
-                        x2, y2, z2 = p2['x'] * 2 - 1, p2['z'] * 0.8, -(p2['y'] * 2 - 1)
-                        ax.plot([x1, x2], [y1, y2], [z1, z2], c='blue', linewidth=2)
+                    p1, p2 = keypoint_map[start], keypoint_map[end]
+                    if p1['score'] < 0.3 or p2['score'] < 0.3:
+                        continue
+                    x1, y1, z1 = p1['x'] * 2 - 1, p1['z'] * 0.8, -(p1['y'] * 2 - 1)
+                    x2, y2, z2 = p2['x'] * 2 - 1, p2['z'] * 0.8, -(p2['y'] * 2 - 1)
 
-            # Draw trails
-            for joint, points in trails.items():
-                if len(points) > 1:
-                    xs, ys, zs = zip(*points[-30:])
-                    ax.plot(xs, ys, zs, linewidth=1.2, alpha=0.5, linestyle='dashed', color='green')
+                    # Front view
+                    ax_front.plot([x1, x2], [y1, y2], [z1, z2], c='blue', linewidth=2)
 
-        # Write the full video
+                    # Side view (rotated around Y-axis)
+                    ax_side.plot([z1, z2], [y1, y2], [-x1, -x2], c='blue', linewidth=2)
+
         with writer.saving(fig, output_video_path, dpi=100):
             for frame_kps in all_frames:
                 update_plot(frame_kps)
@@ -826,7 +820,7 @@ def process_video():
         return jsonify({
             'processed_video_url': f"/static/processed_videos/processed_skeleton_{file_id}.mp4",
             'frames_processed': len(all_frames),
-            'note': '3D skeleton-only video (standing, joint-connected) generated successfully'
+            'note': 'Dual 3D skeleton video generated: front and true side view'
         })
 
     except Exception as e:
