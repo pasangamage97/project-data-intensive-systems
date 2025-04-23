@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import tensorflow as tf
 import tensorflow_hub as hub
@@ -16,6 +16,14 @@ import logging
 from model_utils import get_model_names, load_model
 import pandas as pd
 import random
+from werkzeug.utils import secure_filename
+import traceback
+import tempfile
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.animation import FFMpegWriter
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -24,15 +32,38 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})  # Enable CORS for all routes and origins
 
-# Set maximum content length for file uploads (100MB)
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
+# Set maximum content length for file uploads (2GB)
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024
 
 # Global variable to store the MoveNet model
 movenet = None
 
+# Global variable to store the GRU depth estimation model
+gru_depth_model = None
+
+def load_gru_depth_model():
+    """Load the GRU model for Z value estimation"""
+    global gru_depth_model
+    try:
+        model_path = "models/gru_depth_model"
+        logger.info(f"Loading Z value estimation model from {model_path}")
+        gru_depth_model = tf.keras.models.load_model(model_path)
+        logger.info("Successfully loaded GRU depth model")
+        return True
+    except Exception as e:
+        logger.error(f"Error loading GRU depth model: {e}")
+        logger.warning("Will fall back to proportional Z estimation")
+        return False
+
 def load_movenet_model():
     global movenet
     try:
+        # Print TensorFlow version for debugging
+        logger.info(f"TensorFlow version: {tf.__version__}")
+        
+        # Check if TensorFlow GPU is available
+        logger.info(f"GPU Available: {tf.config.list_physical_devices('GPU')}")
+        
         # Load the MoveNet model
         logger.info("Loading MoveNet model...")
         
@@ -42,7 +73,8 @@ def load_movenet_model():
             "https://tfhub.dev/google/movenet/singlepose/lightning/3",
             "https://tfhub.dev/google/movenet/singlepose/lightning/2",
             "https://tfhub.dev/google/movenet/singlepose/lightning/1",
-            "https://www.kaggle.com/models/google/movenet/TensorFlow2/singlepose-lightning/1"
+            "https://www.kaggle.com/models/google/movenet/TensorFlow2/singlepose-lightning/1",
+            "./models/movenet_singlepose_lightning_4"  # Try local path as last resort
         ]
         
         for url in model_urls:
@@ -51,20 +83,32 @@ def load_movenet_model():
                 model = hub.load(url)
                 movenet = model.signatures['serving_default']
                 logger.info(f"MoveNet model loaded successfully from {url}")
-                return
+                
+                # Test the model with dummy input to verify it works
+                dummy_input = tf.zeros((1, 192, 192, 3), dtype=tf.int32)
+                try:
+                    test_result = movenet(dummy_input)
+                    logger.info(f"Model test successful, output shape: {test_result['output_0'].shape}")
+                except Exception as test_err:
+                    logger.warning(f"Model test failed: {test_err}")
+                    continue
+                    
+                return True
             except Exception as e:
-                logger.warning(f"Failed to load from {url}: {e}")
+                logger.warning(f"Failed to load from {url}: {str(e)}")
                 continue
         
         # If we get here, all URLs failed
         logger.error("All model URLs failed. MoveNet functionality will be disabled.")
+        return False
         
     except Exception as e:
         logger.error(f"Error loading MoveNet model: {e}")
-        # Don't raise, allow app to continue even if MoveNet fails to load
+        return False
 
-# Load the MoveNet model when the app starts
-load_movenet_model()
+# Load the models when the app starts
+model_loaded = load_movenet_model()
+gru_model_loaded = load_gru_depth_model()
 
 # Keypoint names in the order they appear in the model's output
 KEYPOINT_NAMES = [
@@ -77,12 +121,153 @@ KEYPOINT_NAMES = [
 # Directories for saving output files
 CSV_DIR = "pose_data/csv"
 JSON_DIR = "pose_data/json"
+PROCESSED_VIDEO_DIR = "static/processed_videos"
 os.makedirs(CSV_DIR, exist_ok=True)
 os.makedirs(JSON_DIR, exist_ok=True)
+os.makedirs(PROCESSED_VIDEO_DIR, exist_ok=True)
 
 # Ensure an upload folder exists
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def estimate_z_values_with_gru(keypoints_2d):
+    """
+    Estimate Z values for 2D keypoints using the GRU model
+    
+    Args:
+        keypoints_2d: List of dictionaries with keypoints from MoveNet
+    
+    Returns:
+        List of same keypoints with 'z' values added
+    """
+    if not gru_model_loaded or gru_depth_model is None:
+        logger.warning("GRU model not loaded, using proportional estimation")
+        return estimate_z_values_proportional(keypoints_2d)
+    
+    try:
+        # Extract x, y coordinates in the order expected by the model
+        keypoint_map = {kp['name']: kp for kp in keypoints_2d}
+        
+        # Prepare the input sequence for the GRU model
+        input_sequence = []
+        
+        # Use the KEYPOINT_NAMES order
+        for name in KEYPOINT_NAMES:
+            if name in keypoint_map and keypoint_map[name]['score'] > 0.3:
+                x = keypoint_map[name]['x']
+                y = keypoint_map[name]['y']
+                input_sequence.extend([x, y])
+            else:
+                # Use zeros for missing keypoints
+                input_sequence.extend([0.0, 0.0])
+        
+        # Reshape for the model: [batch_size, sequence_length, features]
+        # Adjust shape based on your GRU model architecture
+        model_input = np.array([input_sequence])
+        model_input = model_input.reshape(1, -1, 2)  # Adjust shape as needed
+        
+        # Run inference
+        z_values = gru_depth_model.predict(model_input)[0]
+        
+        # Add Z values to the original keypoints
+        for i, name in enumerate(KEYPOINT_NAMES):
+            if name in keypoint_map:
+                keypoint_map[name]['z'] = float(z_values[i])
+        
+        return keypoints_2d
+    
+    except Exception as e:
+        logger.error(f"Error in GRU Z estimation: {e}")
+        # Fall back to proportional estimation
+        return estimate_z_values_proportional(keypoints_2d)
+
+def estimate_z_values_proportional(keypoints):
+    """Fallback method using anatomical proportions for depth estimation"""
+    # Create a mapping for easier access
+    keypoint_map = {kp['name']: kp for kp in keypoints}
+    
+    # Set initial depth values to 0
+    for kp in keypoints:
+        kp['z'] = 0.0
+    
+    # Use shoulder width as reference for scaling
+    left_shoulder = keypoint_map.get('left_shoulder')
+    right_shoulder = keypoint_map.get('right_shoulder')
+    
+    if left_shoulder and right_shoulder and left_shoulder['score'] > 0.3 and right_shoulder['score'] > 0.3:
+        # Calculate shoulder width in x-coordinate space
+        shoulder_width = abs(left_shoulder['x'] - right_shoulder['x'])
+        
+        # Set scale factor based on shoulder width
+        scale = shoulder_width * 0.5
+        
+        # Face depth - nose is in front
+        if 'nose' in keypoint_map and keypoint_map['nose']['score'] > 0.3:
+            keypoint_map['nose']['z'] = 0.3 * scale
+        
+        # Eyes slightly behind nose
+        for eye in ['left_eye', 'right_eye']:
+            if eye in keypoint_map and keypoint_map[eye]['score'] > 0.3:
+                keypoint_map[eye]['z'] = 0.25 * scale
+        
+        # Ears behind eyes
+        for ear in ['left_ear', 'right_ear']:
+            if ear in keypoint_map and keypoint_map[ear]['score'] > 0.3:
+                keypoint_map[ear]['z'] = 0.15 * scale
+        
+        # Shoulders at reference plane
+        keypoint_map['left_shoulder']['z'] = 0
+        keypoint_map['right_shoulder']['z'] = 0
+        
+        # Elbows slightly forward
+        for elbow in ['left_elbow', 'right_elbow']:
+            if elbow in keypoint_map and keypoint_map[elbow]['score'] > 0.3:
+                # Calculate x-distance from shoulder to determine if arm is in front or behind
+                side = 'left' if 'left' in elbow else 'right'
+                shoulder_x = keypoint_map[f'{side}_shoulder']['x']
+                elbow_x = keypoint_map[elbow]['x']
+                
+                # If elbow is more inward than the shoulder, it's likely in front
+                # For left side: if elbow_x > shoulder_x, it's inward
+                # For right side: if elbow_x < shoulder_x, it's inward
+                if (side == 'left' and elbow_x > shoulder_x) or (side == 'right' and elbow_x < shoulder_x):
+                    keypoint_map[elbow]['z'] = 0.1 * scale
+                else:
+                    keypoint_map[elbow]['z'] = -0.1 * scale
+        
+        # Wrists can extend further in z based on elbow positions
+        for wrist in ['left_wrist', 'right_wrist']:
+            if wrist in keypoint_map and keypoint_map[wrist]['score'] > 0.3:
+                side = 'left' if 'left' in wrist else 'right'
+                elbow = f'{side}_elbow'
+                
+                if elbow in keypoint_map and keypoint_map[elbow]['score'] > 0.3:
+                    # Extend the elbow z position further
+                    elbow_z = keypoint_map[elbow]['z']
+                    keypoint_map[wrist]['z'] = elbow_z * 1.5
+        
+        # Hips slightly behind shoulders
+        for hip in ['left_hip', 'right_hip']:
+            if hip in keypoint_map and keypoint_map[hip]['score'] > 0.3:
+                keypoint_map[hip]['z'] = -0.05 * scale
+        
+        # Knees can be in front or behind based on pose
+        for knee in ['left_knee', 'right_knee']:
+            if knee in keypoint_map and keypoint_map[knee]['score'] > 0.3:
+                # Default slightly behind
+                keypoint_map[knee]['z'] = -0.1 * scale
+        
+        # Ankles typically aligned with knees in z
+        for ankle in ['left_ankle', 'right_ankle']:
+            if ankle in keypoint_map and keypoint_map[ankle]['score'] > 0.3:
+                side = 'left' if 'left' in ankle else 'right'
+                knee = f'{side}_knee'
+                
+                if knee in keypoint_map and keypoint_map[knee]['score'] > 0.3:
+                    # Roughly same z as knee
+                    keypoint_map[ankle]['z'] = keypoint_map[knee]['z']
+    
+    return keypoints
 
 def base64_to_image(base64_string):
     try:
@@ -141,7 +326,10 @@ def run_movenet(image):
                 'score': float(score)
             })
         
-        logger.info(f"Detected {len(formatted_keypoints)} keypoints")
+        # Add Z values using our GRU model or proportional estimation
+        formatted_keypoints = estimate_z_values_with_gru(formatted_keypoints)
+        
+        logger.info(f"Detected {len(formatted_keypoints)} keypoints with Z values")
         return formatted_keypoints
     except Exception as e:
         logger.error(f"Error running MoveNet: {e}")
@@ -162,9 +350,14 @@ def generate_mock_keypoints():
             'y': float(y),
             'score': float(score)
         })
+    
+    # Add Z values using our estimation methods
+    mock_keypoints = estimate_z_values_proportional(mock_keypoints)
     return mock_keypoints
 
 def save_to_csv(keypoints, filename=None, frame_number=0):
+    logger.info(f"[save_to_csv] Saving: {filename}, Frame: {frame_number}")
+
     try:
         if filename is None:
             # Generate a unique filename using timestamp and UUID
@@ -173,22 +366,24 @@ def save_to_csv(keypoints, filename=None, frame_number=0):
             filename = f"{CSV_DIR}/pose_data_{timestamp}_{unique_id}.csv"
         else:
             # Make sure the filename has the correct path and extension
-            if not filename.startswith(CSV_DIR):
-                filename = f"{CSV_DIR}/{filename}"
+            # Ensure parent directories exist
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+
             if not filename.endswith('.csv'):
                 filename += '.csv'
+
         
         # Check if file exists to determine if we should write headers
         file_exists = os.path.isfile(filename)
         
-        # Define the column names (without the z-coordinate)
+        # Define the column names (including z-coordinate)
         fieldnames = ['FrameNo']
         joint_names = ['head', 'left_shoulder', 'left_elbow', 'right_shoulder', 'right_elbow',
                       'left_hand', 'right_hand', 'left_hip', 'right_hip',
                       'left_knee', 'right_knee', 'left_foot', 'right_foot']
         
         for name in joint_names:
-            fieldnames.extend([f"{name}_x", f"{name}_y"])
+            fieldnames.extend([f"{name}_x", f"{name}_y", f"{name}_z"])
         
         # Map MoveNet keypoints to our joint names
         keypoint_mapping = {
@@ -214,16 +409,18 @@ def save_to_csv(keypoints, filename=None, frame_number=0):
         # Prepare the row data
         row_data = {'FrameNo': frame_number}
         
-        # Add each mapped keypoint's x and y values
+        # Add each mapped keypoint's x, y, and z values
         for joint in joint_names:
             if joint in keypoint_dict:
                 kp = keypoint_dict[joint]
                 row_data[f"{joint}_x"] = kp['x']
                 row_data[f"{joint}_y"] = kp['y']
+                row_data[f"{joint}_z"] = kp.get('z', 0.0)  # Default to 0 if z not present
             else:
                 # If we don't have data for this joint, use None or 0
                 row_data[f"{joint}_x"] = None
                 row_data[f"{joint}_y"] = None
+                row_data[f"{joint}_z"] = None
                 
         # Write to CSV
         with open(filename, 'a', newline='') as csvfile:
@@ -241,58 +438,7 @@ def save_to_csv(keypoints, filename=None, frame_number=0):
     except Exception as e:
         logger.error(f"Error saving to CSV: {e}")
         return None
-    try:
-        if filename is None:
-            # Generate a unique filename using timestamp and UUID
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = str(uuid.uuid4())[:8]
-            filename = f"{CSV_DIR}/pose_data_{timestamp}_{unique_id}.csv"
-        else:
-            # Make sure the filename has the correct path and extension
-            if not filename.startswith(CSV_DIR):
-                filename = f"{CSV_DIR}/{filename}"
-            if not filename.endswith('.csv'):
-                filename += '.csv'
-        
-        # Check if file exists to determine if we should write headers
-        file_exists = os.path.isfile(filename)
-        
-        # Convert keypoints to flat structure similar to kinect format
-        row_data = {"FrameNo": frame_number}
-        
-        # Add each keypoint's coordinates to the row
-        for keypoint in keypoints:
-            name = keypoint['name']
-            # Convert MoveNet names to match kinect-like format
-            name = name.replace('_ankle', '_foot').replace('_eye', '_').replace('_ear', '_')
-            
-            row_data[f"{name}_x"] = keypoint['x']
-            row_data[f"{name}_y"] = keypoint['y']
-            row_data[f"{name}_z"] = 0.0  # MoveNet doesn't provide Z coordinates, set to 0
-        
-        # Write to CSV
-        with open(filename, 'a', newline='') as csvfile:
-            # Define the fieldnames in the correct order
-            fieldnames = ['FrameNo']
-            for name in ['head', 'left_shoulder', 'left_elbow', 'right_shoulder', 'right_elbow',
-                         'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
-                         'left_knee', 'right_knee', 'left_foot', 'right_foot']:
-                fieldnames.extend([f"{name}_x", f"{name}_y", f"{name}_z"])
-            
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            
-            # Write header only if the file is new
-            if not file_exists:
-                writer.writeheader()
-            
-            # Write the row
-            writer.writerow(row_data)
-        
-        logger.info(f"Saved frame {frame_number} to CSV: {filename}")
-        return filename
-    except Exception as e:
-        logger.error(f"Error saving to CSV: {e}")
-        return None
+
 def save_to_json(keypoints_by_frame, filename=None):
     try:
         if filename is None:
@@ -320,11 +466,6 @@ def save_to_json(keypoints_by_frame, filename=None):
 @app.route('/detect_pose', methods=['POST'])
 def detect_pose():
     try:
-        # Check if MoveNet model is loaded
-        if movenet is None:
-            logger.error("MoveNet model not loaded")
-            return jsonify({'error': 'MoveNet model not loaded. Please check server logs.'}), 503
-            
         # Check if request has JSON data
         if not request.is_json:
             logger.error("Invalid request: Not JSON")
@@ -344,10 +485,19 @@ def detect_pose():
         if image is None:
             return jsonify({'error': 'Failed to decode image'}), 400
         
+        # Log image dimensions for debugging
+        logger.info(f"Image dimensions: {image.shape}")
+        
         # Run MoveNet on the image
-        keypoints = run_movenet(image)
-        if not keypoints:
-            return jsonify({'error': 'Failed to detect keypoints'}), 500
+        if model_loaded and movenet is not None:
+            keypoints = run_movenet(image)
+            if not keypoints:
+                logger.warning("MoveNet returned no keypoints, falling back to mock data")
+                keypoints = generate_mock_keypoints()
+        else:
+            # Use mock data if model isn't loaded
+            logger.info("Using mock keypoints as MoveNet is not loaded")
+            keypoints = generate_mock_keypoints()
         
         # For real-time tracking, optionally skip saving to CSV to improve performance
         save_csv = data.get('save_csv', True)  # Default to true
@@ -359,17 +509,168 @@ def detect_pose():
             if csv_filename is None:
                 return jsonify({'error': 'Failed to save keypoints to CSV'}), 500
         
-        # Return results
+        # Return results with a flag indicating if mock data was used
         return jsonify({
             'keypoints': keypoints,
-            'csv_filename': os.path.basename(csv_filename) if csv_filename else None
+            'csv_filename': os.path.basename(csv_filename) if csv_filename else None,
+            'using_mock_data': not model_loaded or movenet is None
         })
     except Exception as e:
         logger.error(f"Error in /detect_pose: {e}")
         return jsonify({'error': str(e)}), 500
+    
+
+@app.route('/process_bulk_videos', methods=['POST'])
+def process_bulk_videos():
+    try:
+        if 'videos' not in request.files:
+            return jsonify({'error': 'No videos uploaded'}), 400
+
+        uploaded_files = request.files.getlist('videos')
+        if not uploaded_files:
+            return jsonify({'error': 'Empty file list'}), 400
+
+        # Create a unique output folder for this batch
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_folder = os.path.join("pose_data", "generated", f"batch_{timestamp}")
+        os.makedirs(output_folder, exist_ok=True)
+        logger.info(f"Created output folder: {output_folder}")
+
+        # 13 PoseNet joints used
+        pose_joints = [
+            'head', 'left_shoulder', 'left_elbow', 'right_shoulder', 'right_elbow',
+            'left_hand', 'right_hand', 'left_hip', 'right_hip',
+            'left_knee', 'right_knee', 'left_foot', 'right_foot'
+        ]
+
+        results = []
+
+        for file in uploaded_files:
+            filename = secure_filename(file.filename)
+            base_name = os.path.splitext(filename)[0]
+            temp_path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}_{filename}")
+            file.save(temp_path)
+            logger.info(f"[{filename}] Saved to temp path: {temp_path}")
+
+            try:
+                cap = cv2.VideoCapture(temp_path)
+                if not cap.isOpened():
+                    logger.warning(f"[{filename}] Could not open video.")
+                    continue
+
+                frame_interval = 5
+                saved_frames = 0
+                frame_idx = 0
+                combined_rows = []
+
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    if frame_idx % frame_interval == 0:
+                        keypoints = run_movenet(frame) if model_loaded and movenet else generate_mock_keypoints()
+                        kp_map = {kp['name']: kp for kp in keypoints}
+
+                        row = []
+                        for joint in pose_joints:
+                            kp = kp_map.get(joint)
+                            row.extend([kp['x'], kp['y']] if kp else [None, None])
+
+                        combined_rows.append(row)
+                        logger.info(f"[{filename}] Frame {frame_idx}: Keypoints processed.")
+                        saved_frames += 1
+
+                    frame_idx += 1
+
+                cap.release()
+                os.remove(temp_path)
+
+                # Save CSV
+                pose_cols = []
+                for joint in pose_joints:
+                    pose_cols.extend([f"{joint}_x", f"{joint}_y"])
+                df = pd.DataFrame(combined_rows, columns=pose_cols)
+
+                csv_path = os.path.join(output_folder, f"{base_name}_pose.csv")
+                df.to_csv(csv_path, index=False)
+                logger.info(f"[{filename}] CSV saved to {csv_path}")
+
+                results.append({
+                    "video": filename,
+                    "frames_processed": frame_idx,
+                    "frames_saved": saved_frames,
+                    "csv_file": os.path.basename(csv_path),
+                    "csv_path": csv_path
+                })
+
+            except Exception as e:
+                logger.error(f"[{filename}] Error while processing video: {e}")
+
+        return jsonify({
+            "status": "completed",
+            "total_videos": len(results),
+            "output_folder": output_folder,
+            "results": results
+        })
+
+    except Exception as e:
+        logger.error(f"Bulk video processing error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 
 @app.route('/detect_pose_simple', methods=['POST'])
 def detect_pose_simple():
+    try:
+        # Check if request has JSON data
+        if not request.is_json:
+            return jsonify({'error': 'Request must be JSON'}), 400
+        
+        # Get the base64 image data
+        data = request.get_json()
+        if 'image' not in data:
+            return jsonify({'error': 'No image data provided'}), 400
+        
+        base64_image = data['image']
+        
+        # Skip image decoding if it's a placeholder or too short
+        if len(base64_image) < 50:  # Arbitrary threshold for a minimal valid image
+            logger.warning("Image data too short, using mock data without decoding")
+            keypoints = generate_mock_keypoints()
+        else:
+            # Try to convert base64 to image
+            image = base64_to_image(base64_image)
+            if image is None:
+                logger.warning("Failed to decode image, using mock data")
+                keypoints = generate_mock_keypoints()
+            else:
+                # For testing: Generate mock keypoints
+                keypoints = generate_mock_keypoints()
+        
+        # Check if we should save to CSV (for real-time tracking, we might skip)
+        save_csv = data.get('save_csv', True)  # Default to true
+        csv_filename = None
+        
+        if save_csv:
+            # Save keypoints to CSV
+            csv_filename = save_to_csv(keypoints)
+        
+        # Return results
+        return jsonify({
+            'keypoints': keypoints,
+            'csv_filename': os.path.basename(csv_filename) if csv_filename else "mock_data.csv"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in /detect_pose_simple: {e}")
+        # Always return mock data on any error
+        keypoints = generate_mock_keypoints()
+        return jsonify({
+            'keypoints': keypoints,
+            'csv_filename': "error_mock_data.csv",
+            'error_details': str(e)
+        })
     try:
         # Check if request has JSON data
         if not request.is_json:
@@ -387,7 +688,7 @@ def detect_pose_simple():
         if image is None:
             return jsonify({'error': 'Failed to decode image'}), 400
         
-        # For testing: Generate mock keypoints instead of using the model
+        # Generate mock keypoints
         keypoints = generate_mock_keypoints()
         
         # Check if we should save to CSV (for real-time tracking, we might skip)
@@ -414,102 +715,135 @@ def process_video():
         if 'video' not in request.files:
             logger.error("No video file provided")
             return jsonify({'error': 'No video file provided'}), 400
-        
+
         video_file = request.files['video']
         logger.info(f"Processing video: {video_file.filename}")
-        
-        # Generate timestamp for file identification
+
+        # Generate unique file ID
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
         file_id = f"{timestamp}_{unique_id}"
-        
-        # Save the uploaded file to a temporary location
+
+        # Save uploaded video to temp path
         temp_dir = tempfile.gettempdir()
         temp_path = os.path.join(temp_dir, f"temp_video_{file_id}.mp4")
         video_file.save(temp_path)
         logger.info(f"Saved video to temporary file: {temp_path}")
-        
-        # Open the video file
+
+        # Read video
         cap = cv2.VideoCapture(temp_path)
-        
-        # Check if video opened successfully
         if not cap.isOpened():
             logger.error("Error opening video file")
             return jsonify({'error': 'Error opening video file'}), 500
-        
-        # Get video info
+
         fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        logger.info(f"Video info: FPS={fps}, Total frames={frame_count}")
-        
-        # Create filenames for CSV and JSON output
-        csv_filename = f"video_pose_data_{file_id}.csv"
-        json_filename = f"video_pose_data_{file_id}.json"
-        
-        # Container for all keypoints by frame
-        all_keypoints = {}
-        
-        # Process video frames at a reasonable sampling rate
-        # For long videos, we may want to sample at a lower rate
-        frame_interval = max(1, int(fps / 5))  # Process at most 5 frames per second
-        
+        frame_interval = max(1, int(fps / 5))  # sample ~5 fps
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        all_frames = []
         frame_idx = 0
-        processed_frames = 0
-        
+
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
-            
-            # Only process every nth frame
             if frame_idx % frame_interval == 0:
-                # Run pose detection (use movenet if available, otherwise use mock data)
-                if movenet is not None:
+                if model_loaded and movenet is not None:
                     keypoints = run_movenet(frame)
+                    if not keypoints:
+                        keypoints = generate_mock_keypoints()
                 else:
                     keypoints = generate_mock_keypoints()
-                
-                # Save to CSV
-                save_to_csv(keypoints, csv_filename, frame_idx)
-                
-                # Add to JSON data
-                all_keypoints[str(frame_idx)] = keypoints
-                
-                processed_frames += 1
-            
+                all_frames.append(keypoints)
             frame_idx += 1
-        
-        # Save all keypoints to JSON
-        json_path = save_to_json(all_keypoints, json_filename)
-        
-        # Release the video file
+
         cap.release()
-        
-        # Remove temporary file
-        try:
-            os.remove(temp_path)
-            logger.info(f"Removed temporary file: {temp_path}")
-        except:
-            logger.warning(f"Failed to remove temporary file: {temp_path}")
-        
-        # Return results
+        os.remove(temp_path)
+
+        # Setup matplotlib for video output
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        fig.set_size_inches(8, 6)
+
+        output_video_path = os.path.join(PROCESSED_VIDEO_DIR, f"processed_skeleton_{file_id}.mp4")
+        writer = FFMpegWriter(fps=5)
+
+        # Trails dictionary to keep recent positions
+        trails = {name: [] for name in KEYPOINT_NAMES}
+
+        def update_plot(keypoints):
+            ax.cla()
+            ax.set_xlim(-1, 1)
+            ax.set_ylim(-1, 1)
+            ax.set_zlim(-1, 1)
+            ax.set_title("3D Skeleton - Standing Upright")
+
+            # Scatter keypoints and update trails
+            for kp in keypoints:
+                if kp['score'] > 0.3:
+                    x = kp['x'] * 2 - 1
+                    y = kp['z'] * 0.8  # z is now height
+                    z = -(kp['y'] * 2 - 1)
+                    trails[kp['name']].append((x, y, z))
+                    ax.scatter(x, y, z, c='red', s=30)
+
+            # Draw skeleton bones
+            keypoint_map = {kp['name']: kp for kp in keypoints}
+            for start, end in [
+                ('nose', 'left_eye'), ('nose', 'right_eye'),
+                ('left_eye', 'left_ear'), ('right_eye', 'right_ear'),
+                ('left_shoulder', 'right_shoulder'),
+                ('left_shoulder', 'left_elbow'), ('right_shoulder', 'right_elbow'),
+                ('left_elbow', 'left_wrist'), ('right_elbow', 'right_wrist'),
+                ('left_shoulder', 'left_hip'), ('right_shoulder', 'right_hip'),
+                ('left_hip', 'right_hip'),
+                ('left_hip', 'left_knee'), ('right_hip', 'right_knee'),
+                ('left_knee', 'left_ankle'), ('right_knee', 'right_ankle')
+            ]:
+                if start in keypoint_map and end in keypoint_map:
+                    p1 = keypoint_map[start]
+                    p2 = keypoint_map[end]
+                    if p1['score'] > 0.3 and p2['score'] > 0.3:
+                        x1, y1, z1 = p1['x'] * 2 - 1, p1['z'] * 0.8, -(p1['y'] * 2 - 1)
+                        x2, y2, z2 = p2['x'] * 2 - 1, p2['z'] * 0.8, -(p2['y'] * 2 - 1)
+                        ax.plot([x1, x2], [y1, y2], [z1, z2], c='blue', linewidth=2)
+
+            # Draw trails
+            for joint, points in trails.items():
+                if len(points) > 1:
+                    xs, ys, zs = zip(*points[-30:])
+                    ax.plot(xs, ys, zs, linewidth=1.2, alpha=0.5, linestyle='dashed', color='green')
+
+        # Write the full video
+        with writer.saving(fig, output_video_path, dpi=100):
+            for frame_kps in all_frames:
+                update_plot(frame_kps)
+                writer.grab_frame()
+
+        plt.close(fig)
+
         return jsonify({
-            'csv_filename': os.path.basename(csv_filename),
-            'json_filename': os.path.basename(json_filename),
-            'frames_processed': processed_frames,
-            'total_frames': frame_count,
-            'fps': fps
+            'processed_video_url': f"/static/processed_videos/processed_skeleton_{file_id}.mp4",
+            'frames_processed': len(all_frames),
+            'note': '3D skeleton-only video (standing, joint-connected) generated successfully'
         })
+
     except Exception as e:
-        logger.error(f"Error in /process_video: {e}")
+        logger.error(f"Error in process_video: {e}")
         return jsonify({'error': str(e)}), 500
+    
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    return send_from_directory('static', filename)
 
 # Add a simple health check endpoint
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
         'status': 'ok',
-        'model_loaded': movenet is not None
+        'model_loaded': model_loaded,
+        'gru_model_loaded': gru_model_loaded
     })
 
 @app.route('/api/hello', methods=['GET'])
@@ -525,7 +859,7 @@ def get_models_route():
 @app.route('/api/models', methods=['GET'])
 def get_models():
     models = [
-        {"label": "Mode,l A", "value": "model_a"},
+        {"label": "Model A", "value": "model_a"},
         {"label": "Model B", "value": "model_b"},
         {"label": "Model C", "value": "model_c"},
     ]
@@ -650,47 +984,8 @@ def classify_weakest_link(model_name):
     except Exception as e:
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
-
 @app.route('/save_realtime_frames', methods=['POST'])
 def save_realtime_frames():
-    try:
-        # Check if request has JSON data
-        if not request.is_json:
-            logger.error("Invalid request: Not JSON")
-            return jsonify({'error': 'Request must be JSON'}), 400
-        
-        # Get the frames data
-        data = request.get_json()
-        if 'frames' not in data or not data['frames']:
-            logger.error("Invalid request: No frames data or empty frames")
-            return jsonify({'error': 'No frames data provided'}), 400
-        
-        frames = data['frames']
-        logger.info(f"Received {len(frames)} frames for saving")
-        
-        # Generate a unique filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = str(uuid.uuid4())[:8]
-        csv_filename = f"realtime_tracking_{timestamp}_{unique_id}.csv"
-        json_filename = f"realtime_tracking_{timestamp}_{unique_id}.json"
-        
-        # Save all frames to a single CSV file
-        for frame_idx, keypoints in enumerate(frames):
-            save_to_csv(keypoints, csv_filename, frame_idx)
-        
-        # Also save as JSON for easier processing (optional)
-        all_keypoints = {str(idx): keypoints for idx, keypoints in enumerate(frames)}
-        json_path = save_to_json(all_keypoints, json_filename)
-        
-        return jsonify({
-            'csv_filename': os.path.basename(csv_filename),
-            'json_filename': os.path.basename(json_filename),
-            'frames_processed': len(frames)
-        })
-        
-    except Exception as e:
-        logger.error(f"Error in /save_realtime_frames: {e}")
-        return jsonify({'error': str(e)}), 500
     try:
         # Check if request has JSON data
         if not request.is_json:
@@ -729,5 +1024,6 @@ def save_realtime_frames():
     except Exception as e:
         logger.error(f"Error in /save_realtime_frames: {e}")
         return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
